@@ -13,7 +13,7 @@ services:
     ports:
       - "3306:3306"
     environment:
-#      MYSQL_DATABASE: symfony
+      MYSQL_DATABASE: symfony
       MYSQL_ROOT_PASSWORD: root
       MYSQL_USER: symfony
       MYSQL_PASSWORD: symfony

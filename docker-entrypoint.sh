@@ -6,12 +6,12 @@ docker-php-ext-install pdo_mysql
 # Install dependencies
 composer install --no-scripts --no-interaction --prefer-dist
 
-php bin/console sass:build
-php bin/console importmap:install
+symfony console sass:build
+symfony console importmap:install
 
 # Update DB
-php bin/console doctrine:schema:update --complete --force
-php bin/console doctrine:fixtures:load --no-interaction
+symfony console doctrine:schema:update --complete --force
+symfony console doctrine:fixtures:load --no-interaction
 
 # Start the PHP server
 symfony serve
