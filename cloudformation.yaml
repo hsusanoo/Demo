@@ -1,0 +1,204 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: ECS Symfony
+
+Metadata:
+  AWS::CloudFormation::Interface:
+    ParameterGroups:
+      -
+        Label:
+          default: "Network Configuration"
+        Parameters:
+          - VPC
+          - PublicSubnet
+          - PrivateSubnet
+      -
+        Label:
+          default: "Docker images"
+        Parameters:
+          - WebAppImage
+          - DBImage
+
+Parameters:
+  VPC:
+    Type: AWS::EC2::VPC::Id
+    Description: VPC where the tasks will be deployed.
+  PublicSubnet:
+    Type: AWS::EC2::Subnet::Id
+    Description: Public subnet.
+  PrivateSubnet:
+    Type: AWS::EC2::Subnet::Id
+    Description: Private subnet.
+  WebAppImage:
+    Type: String
+    Description: Docker image URL for the web application.
+  DBImage:
+    Type: String
+    Default: docker.io/mysql
+    Description: Docker image URL for the database.
+
+Resources:
+
+  ECSCluster:
+    Type: AWS::ECS::Cluster
+    Properties:
+      ClusterName: MySymfonyCluster
+
+  WebAppTaskDefinition:
+    Type: AWS::ECS::TaskDefinition
+    Properties:
+      Family: WebAppTask
+      NetworkMode: awsvpc
+      RequiresCompatibilities:
+        - FARGATE
+      Cpu: '256'
+      Memory: '512'
+      ExecutionRoleArn: !Sub 'arn:aws:iam::${AWS::AccountId}:role/ecsTaskExecutionRole'
+      ContainerDefinitions:
+        - Name: WebApp
+          Image: !Ref WebAppImage
+          PortMappings:
+            - ContainerPort: 8000
+          Environment:
+            - Name: COMPOSER_ALLOW_SUPERUSER
+              Value: "1"
+            - Name: DATABASE_URL
+              Value: !Sub "mysql://symfony:symfony@DBService.myapp.local:3306/symfony?serverVersion=8&charset=utf8mb4"
+          LogConfiguration:
+            LogDriver: awslogs
+            Options:
+              awslogs-group: !Ref WebAppTaskLogGroup
+              awslogs-region: !Ref AWS::Region
+              awslogs-stream-prefix: DBTask
+
+  WebAppService:
+    Type: AWS::ECS::Service
+    Properties:
+      Cluster: !Ref ECSCluster
+      TaskDefinition: !Ref WebAppTaskDefinition
+      DesiredCount: 1
+      LaunchType: FARGATE
+      NetworkConfiguration:
+        AwsvpcConfiguration:
+          Subnets:
+            - !Ref PublicSubnet
+          SecurityGroups:
+            - !Ref WebAppSecurityGroup
+          AssignPublicIp: ENABLED
+      ServiceRegistries:
+        - RegistryArn: !GetAtt WebAppCloudMapService.Arn
+
+  DBTaskDefinition:
+    Type: AWS::ECS::TaskDefinition
+    Properties:
+      Family: DBTask
+      NetworkMode: awsvpc
+      RequiresCompatibilities:
+        - FARGATE
+      Cpu: '512'
+      Memory: '1GB'
+      ExecutionRoleArn: !Sub 'arn:aws:iam::${AWS::AccountId}:role/ecsTaskExecutionRole'
+      ContainerDefinitions:
+        - Name: DB
+          Image: !Ref DBImage
+          PortMappings:
+            - ContainerPort: 3306
+          Environment:
+            - Name: MYSQL_DATABASE
+              Value: symfony
+            - Name: MYSQL_ROOT_PASSWORD
+              Value: root
+            - Name: MYSQL_USER
+              Value: symfony
+            - Name: MYSQL_PASSWORD
+              Value: symfony
+          LogConfiguration:
+            LogDriver: awslogs
+            Options:
+              awslogs-group: !Ref DBTaskLogGroup
+              awslogs-region: !Ref AWS::Region
+              awslogs-stream-prefix: DBTask
+
+  DBService:
+    Type: AWS::ECS::Service
+    Properties:
+      Cluster: !Ref ECSCluster
+      TaskDefinition: !Ref DBTaskDefinition
+      DesiredCount: 1
+      LaunchType: FARGATE
+      NetworkConfiguration:
+        AwsvpcConfiguration:
+          Subnets:
+            - !Ref PrivateSubnet
+          SecurityGroups:
+            - !Ref DBSecurityGroup
+      ServiceRegistries:
+        - RegistryArn: !GetAtt DBCloudMapService.Arn
+
+  DBTaskLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: "/ecs/DBTask"
+  WebAppTaskLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: "/ecs/WebAppTask"
+
+  WebAppSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Security group for WebAppService
+      VpcId: !Ref VPC
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 8000
+          ToPort: 8000
+          CidrIp: 0.0.0.0/0
+      SecurityGroupEgress:
+        - IpProtocol: "-1"
+          FromPort: 0
+          ToPort: 65535
+          CidrIp: 0.0.0.0/0
+
+  DBSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Security group for DBService
+      VpcId: !Ref VPC
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 3306
+          ToPort: 3306
+          SourceSecurityGroupId: !Ref WebAppSecurityGroup # Only allow the web app
+      SecurityGroupEgress:
+        - IpProtocol: "-1"
+          FromPort: 0
+          ToPort: 65535
+          CidrIp: 0.0.0.0/0
+
+  WebAppCloudMapService:
+    Type: AWS::ServiceDiscovery::Service
+    Properties:
+      Name: WebAppService
+      Description: Discovery service for the Symfony web app
+      NamespaceId: !Ref CloudMapNamespace
+      DnsConfig:
+        DnsRecords:
+          - TTL: 60
+            Type: A
+
+  DBCloudMapService:
+    Type: AWS::ServiceDiscovery::Service
+    Properties:
+      Name: DBService
+      Description: Discovery service for the MySQL db
+      NamespaceId: !Ref CloudMapNamespace
+      DnsConfig:
+        DnsRecords:
+          - TTL: 60
+            Type: A
+
+  CloudMapNamespace:
+    Type: AWS::ServiceDiscovery::PrivateDnsNamespace
+    Properties:
+      Name: myapp.local
+      Vpc: !Ref VPC
